@@ -605,13 +605,36 @@
     left: 50%;
     transform: translateX(-50%);
     display: flex;
-    gap: 10px;
+    align-items: center;
+    gap: 8px;
     background: var(--panel);
     border: 2px solid var(--line);
     padding: 10px;
     border-radius: 0;
     box-shadow: 4px 4px 0 var(--line);
+    touch-action: none;
+    z-index: 3;
   }
+  #towerBar.dragging { opacity: 0.92; box-shadow: 6px 6px 0 var(--line); }
+  #towerBarHandle {
+    flex-shrink: 0;
+    width: 20px;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #8a84a8;
+    background: var(--panel-lt);
+    border: 1px solid var(--line);
+    cursor: grab;
+    font-size: 13px;
+    letter-spacing: -1px;
+    user-select: none;
+    touch-action: none;
+  }
+  #towerBarHandle:hover { color: #fff; background: #392f57; }
+  #towerBarHandle:active { cursor: grabbing; }
+  #towerBarCards { display: flex; gap: 10px; }
   .towerCard {
     width: 80px;
     padding: 9px 6px;
@@ -1176,7 +1199,10 @@
       </div>
       <div id="msgBanner"></div>
 
-      <div id="towerBar"></div>
+      <div id="towerBar">
+        <div id="towerBarHandle" title="Arrastar barra">&#8942;&#8942;</div>
+        <div id="towerBarCards"></div>
+      </div>
 
       <div id="speedControl">
         <button class="speedBtn active" id="speed1xBtn" data-speed="1">1x</button>
@@ -1266,6 +1292,7 @@
 <script>
 /* ============ Telas ============ */
 function showScreen(id){
+  if(id !== 'gameScreen') exitFullscreenIfActive();
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
@@ -2135,8 +2162,9 @@ function refreshTowerBarState(){
 }
 
 const towerBar = document.getElementById('towerBar');
+const towerBarCards = document.getElementById('towerBarCards');
 function buildTowerBar(){
-  towerBar.innerHTML = '';
+  towerBarCards.innerHTML = '';
   equippedCharacters.forEach(key=>{
     const def = TOWER_TYPES[key];
     if(!def) return;
@@ -2160,10 +2188,99 @@ function buildTowerBar(){
       canvas.classList.remove('dragOver');
     });
     card.addEventListener('click', ()=> showTowerTypeInfo(key, card));
-    towerBar.appendChild(card);
+    towerBarCards.appendChild(card);
   });
   refreshTowerBarState();
 }
+
+/* ============ Barra de personagens reposicionavel ============
+   Arraste pela alca (os dois pontinhos na lateral) pra mover a barra pra
+   qualquer lugar dentro da tela do jogo - util quando ela cai em cima do
+   caminho/colinas de um mapa e atrapalha a colocacao de torres. A posicao
+   fica salva entre sessoes (por mapa). */
+const towerBarHandle = document.getElementById('towerBarHandle');
+let towerBarDrag = null; /* {startX, startY, baseLeft, baseTop} enquanto arrastando */
+
+function towerBarStorageKey(){
+  return 'webtd_towerbar_pos';
+}
+function saveTowerBarPos(left, top){
+  try{
+    localStorage.setItem(towerBarStorageKey(), JSON.stringify({left, top}));
+  }catch(e){ /* localStorage pode estar bloqueado - tudo bem, so nao persiste */ }
+}
+function loadTowerBarPos(){
+  try{
+    const raw = localStorage.getItem(towerBarStorageKey());
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+
+function clampTowerBarPos(left, top){
+  const wrapRect = gameWrapEl.getBoundingClientRect();
+  const barRect = towerBar.getBoundingClientRect();
+  const maxLeft = Math.max(0, wrapRect.width - barRect.width);
+  const maxTop = Math.max(0, wrapRect.height - barRect.height);
+  return {
+    left: Math.min(Math.max(left, 0), maxLeft),
+    top: Math.min(Math.max(top, 0), maxTop)
+  };
+}
+
+function applyTowerBarPos(left, top){
+  towerBar.style.left = left + 'px';
+  towerBar.style.top = top + 'px';
+  towerBar.style.bottom = 'auto';
+  towerBar.style.transform = 'none';
+}
+
+function restoreTowerBarPos(){
+  const saved = loadTowerBarPos();
+  if(!saved) return;
+  /* espera o layout assentar antes de medir/posicionar */
+  requestAnimationFrame(()=>{
+    const clamped = clampTowerBarPos(saved.left, saved.top);
+    applyTowerBarPos(clamped.left, clamped.top);
+  });
+}
+
+towerBarHandle.addEventListener('pointerdown', (e)=>{
+  e.preventDefault();
+  const wrapRect = gameWrapEl.getBoundingClientRect();
+  const barRect = towerBar.getBoundingClientRect();
+  towerBarDrag = {
+    startX: e.clientX,
+    startY: e.clientY,
+    baseLeft: barRect.left - wrapRect.left,
+    baseTop: barRect.top - wrapRect.top
+  };
+  towerBar.classList.add('dragging');
+  towerBarHandle.setPointerCapture(e.pointerId);
+});
+towerBarHandle.addEventListener('pointermove', (e)=>{
+  if(!towerBarDrag) return;
+  const dx = e.clientX - towerBarDrag.startX;
+  const dy = e.clientY - towerBarDrag.startY;
+  const clamped = clampTowerBarPos(towerBarDrag.baseLeft + dx, towerBarDrag.baseTop + dy);
+  applyTowerBarPos(clamped.left, clamped.top);
+});
+function endTowerBarDrag(){
+  if(!towerBarDrag) return;
+  towerBarDrag = null;
+  towerBar.classList.remove('dragging');
+  const wrapRect = gameWrapEl.getBoundingClientRect();
+  const barRect = towerBar.getBoundingClientRect();
+  saveTowerBarPos(barRect.left - wrapRect.left, barRect.top - wrapRect.top);
+}
+towerBarHandle.addEventListener('pointerup', endTowerBarDrag);
+towerBarHandle.addEventListener('pointercancel', endTowerBarDrag);
+towerBarHandle.addEventListener('dblclick', ()=>{
+  towerBar.style.left = '';
+  towerBar.style.top = '';
+  towerBar.style.bottom = '14px';
+  towerBar.style.transform = 'translateX(-50%)';
+  try{ localStorage.removeItem(towerBarStorageKey()); }catch(e){}
+});
 
 /* ============ Velocidade do jogo ============ */
 const speedButtons = document.querySelectorAll('.speedBtn');
@@ -2615,6 +2732,7 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
 document.getElementById('closeSettingsBtn').addEventListener('click', closeSettings);
 document.getElementById('menuFromSettingsBtn').addEventListener('click', ()=>{
   closeSettings();
+  exitFullscreenIfActive();
   showScreen('mapSelectScreen');
 });
 settingsOverlay.addEventListener('click', (e)=>{
@@ -2634,6 +2752,11 @@ function setFullscreenIcon(isFull){
   fullscreenBtn.querySelector('svg').innerHTML = isFull ? ICON_COMPRESS : ICON_EXPAND;
   fullscreenBtn.title = isFull ? 'Sair da tela cheia' : 'Tela cheia';
 }
+function exitFullscreenIfActive(){
+  if(document.fullscreenElement && document.exitFullscreen){
+    document.exitFullscreen().catch(()=>{});
+  }
+}
 fullscreenBtn.addEventListener('click', ()=>{
   if(!document.fullscreenElement){
     (gameWrapEl.requestFullscreen ? gameWrapEl.requestFullscreen() : Promise.reject()).catch(()=>{});
@@ -2643,6 +2766,14 @@ fullscreenBtn.addEventListener('click', ()=>{
 });
 document.addEventListener('fullscreenchange', ()=>{
   setFullscreenIcon(!!document.fullscreenElement);
+  if(towerBar.style.left){
+    requestAnimationFrame(()=>{
+      const rect = towerBar.getBoundingClientRect();
+      const wrapRect = gameWrapEl.getBoundingClientRect();
+      const clamped = clampTowerBarPos(rect.left - wrapRect.left, rect.top - wrapRect.top);
+      applyTowerBarPos(clamped.left, clamped.top);
+    });
+  }
 });
 
 function updateStartBtnVisibility(){
@@ -2709,12 +2840,7 @@ function showTowerInfo(t, fromStats){
   const panel = document.getElementById('infoPanel');
   const def = TOWER_TYPES[t.type];
   const stats = towerStats(t);
-  const pos = canvasToScreen(t.x, t.y);
   panel.style.display = 'block';
-  let left = pos.left + 24;
-  if(left + 180 > canvas.clientWidth) left = pos.left - 190;
-  panel.style.left = left + 'px';
-  panel.style.top = Math.max(pos.top - 10, 0) + 'px';
 
   document.getElementById('infoName').textContent = def.label;
   document.getElementById('infoType').textContent = categoryLabel(def.category);
@@ -2765,6 +2891,22 @@ function showTowerInfo(t, fromStats){
   sellBtn.style.display = 'block';
   const refund = Math.round((t.spentGold||def.cost) * 0.4);
   sellBtn.textContent = 'Vender \u2014 +' + refund + ' ouro';
+
+  /* posiciona por ultimo, com o conteudo (e a altura real) ja definidos - assim
+     da pra "virar" o painel pra cima/esquerda quando nao ha espaco embaixo/direita,
+     o que evita ele cortar quando a torre esta perto da borda (comum em tela cheia) */
+  const wrapRect = gameWrapEl.getBoundingClientRect();
+  const pos = canvasToScreen(t.x, t.y);
+  const panelW = panel.offsetWidth || 172;
+  const panelH = panel.offsetHeight || 220;
+  let left = pos.left + 24;
+  if(left + panelW > wrapRect.width) left = pos.left - panelW - 24;
+  left = Math.min(Math.max(left, 4), Math.max(wrapRect.width - panelW - 4, 4));
+  let top = pos.top - 10;
+  if(top + panelH > wrapRect.height) top = pos.top - panelH + 10;
+  top = Math.min(Math.max(top, 4), Math.max(wrapRect.height - panelH - 4, 4));
+  panel.style.left = left + 'px';
+  panel.style.top = top + 'px';
 }
 
 function renderTargetModeRow(t, def){
@@ -2803,9 +2945,6 @@ function showTowerTypeInfo(key, cardEl){
   const wrapRect = document.getElementById('gameWrap').getBoundingClientRect();
   const cardRect = cardEl.getBoundingClientRect();
   panel.style.display = 'block';
-  panel.style.left = (cardRect.left - wrapRect.left) + 'px';
-  panel.style.top = 'auto';
-  panel.style.bottom = (wrapRect.bottom - cardRect.top + 10) + 'px';
 
   const tier1 = tierAt(def, 1);
   document.getElementById('infoName').textContent = def.label;
@@ -2825,6 +2964,13 @@ function showTowerTypeInfo(key, cardEl){
   document.getElementById('upgradeBtn').style.display = 'none';
   document.getElementById('targetModeRow').style.display = 'none';
   document.getElementById('sellBtn').style.display = 'none';
+
+  const panelW = panel.offsetWidth || 172;
+  let left = cardRect.left - wrapRect.left;
+  left = Math.min(Math.max(left, 4), Math.max(wrapRect.width - panelW - 4, 4));
+  panel.style.left = left + 'px';
+  panel.style.top = 'auto';
+  panel.style.bottom = (wrapRect.bottom - cardRect.top + 10) + 'px';
 }
 
 document.getElementById('upgradeBtn').addEventListener('click', ()=>{
@@ -4521,6 +4667,7 @@ function resetGameState(){
   dragPreview = null; draggingNewType = null; waveGapTimer = 0;
   settingsOpen = false; settingsOverlay.style.display = 'none';
   buildTowerBar();
+  restoreTowerBarPos();
   document.getElementById('hp').textContent = hp;
   document.getElementById('gold').textContent = gold;
   document.getElementById('wave').textContent = waveLabel(wave);
@@ -4553,7 +4700,10 @@ function startGameWithMap(map, mode){
 }
 
 document.getElementById('restartBtn').addEventListener('click', resetGameState);
-document.getElementById('toMapsBtn').addEventListener('click', ()=> showScreen('mapSelectScreen'));
+document.getElementById('toMapsBtn').addEventListener('click', ()=>{
+  exitFullscreenIfActive();
+  showScreen('mapSelectScreen');
+});
 </script>
 
 </body>
